@@ -81,98 +81,68 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
         $this->security->enable(false);
     }
 
-    public function NbGetManifest($version)
+    public function NbGetManifest($v)
+    {
+        return Widget_XmlRpc::NbGetManifestStatic();
+    }
+
+    public static function NbGetManifestStatic()
     {
         return array(
             "engineName" => "typecho",
             "versionCode" => 12,
-            "versionName" => "2.1",
-            "manifest" => $version
+            "versionName" => "2.1"
         );
     }
-
 
     /**
      * 检查权限
      *
      * @access public
-     * @param $name
-     * @param $password
+     * @param string $union
+     * @param string $name
+     * @param string $password
      * @param string $level
      * @return bool
-     * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function checkAccess($name, $password, $level = 'contributor')
+    public function checkAccess($name, $password, $level = 'contributor', $union = '')
     {
-        /** 判断密码是明文还是MD5(32) */
-        if (preg_match("/^[a-f0-9]{32}$/", $password)) {
-            $user = $this->db->fetchRow($this->db->select()
-                ->from('table.users')
-                ->where((strpos($name, '@') ? 'mail' : 'name') . ' = ?', $name)
-                ->limit(1));
-
-            if (empty($user)) {
-                return false;
-            }
-
-            if (hash_equals($password, md5($user['password']))) {
-                /** 验证权限 */
-                if (array_key_exists($level, $this->user->groups) && $this->user->groups[$this->user->group] <= $this->user->groups[$level]) {
-                    /** 设置登录 */
-                    $this->user->simpleLogin($user['uid']);
-                    /** 更新最后活动时间  */
-                    $this->db->query($this->db
-                        ->update('table.users')
-                        ->rows(array('activated' => Typecho_Widget::widget('Widget_Options')->time))
-                        ->where('uid = ?', $user['uid']));
-                    $this->uid = $user['uid'];
-                    return true;
-                } else {
-                    $this->error = new IXR_Error(403, _t('权限不足'));
-                    return false;
-                }
-
+        /** 记录唯一标识 */
+        Typecho_Cookie::set('__typecho_union', $union, 0);
+        /** 鉴权 */
+        if ($this->user->login($name, $password, true)) {
+            /** 验证权限 */
+            if ($this->user->pass($level, true)) {
+                $this->uid = $this->user->uid;
+                $this->user->execute();
+                return true;
             } else {
-                $this->error = new IXR_Error(403, _t('无法登陆, 密码错误'));
+                $this->error = new IXR_Error(403, _t('权限不足'));
                 return false;
             }
-
         } else {
-            if ($this->user->login($name, $password, true)) {
-                /** 验证权限 */
-                if ($this->user->pass($level, true)) {
-                    $this->uid = $this->user->uid;
-                    $this->user->execute();
-                    return true;
-                } else {
-                    $this->error = new IXR_Error(403, _t('权限不足'));
-                    return false;
-                }
-            } else {
-                $this->error = new IXR_Error(403, _t('无法登陆, 密码错误'));
-                return false;
-            }
+            $this->error = new IXR_Error(403, _t('无法登陆, 密码错误'));
+            return false;
         }
-
     }
 
     /**
      * 获取用户
      *
      * @access public
-     * @param $blogId
-     * @param $userName
-     * @param $password
+     * @param string $union
+     * @param string $userName
+     * @param string $password
      * @return array|IXR_Error
      * @throws Typecho_Widget_Exception
      * @throws Typecho_Exception
      * @noinspection PhpUndefinedFieldInspection
      */
-    public function NbGetUser($blogId, $userName, $password)
+    public function NbGetUser($union, $userName, $password)
     {
 
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -358,7 +328,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
     /**
      * 常用统计
      *
-     * @param int $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @return array|IXR_Error
@@ -366,9 +336,9 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @access public
      */
-    public function NbGetStat($blogId, $userName, $password)
+    public function NbGetStat($union, $userName, $password)
     {
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
         $statArray = array(
@@ -376,52 +346,52 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
                 "all" => $this->db->fetchObject($this->db->select(array('COUNT(cid)' => 'num'))
                     ->from('table.contents')
                     ->where('table.contents.type = ?', 'post')
-                    ->where('authorId = ?', $blogId))->num,
+                    ->where('authorId = ?', $this->uid))->num,
                 "publish" => $this->db->fetchObject($this->db->select(array('COUNT(cid)' => 'num'))
                     ->from('table.contents')
                     ->where('table.contents.type = ?', 'post')
                     ->where('table.contents.status = ?', 'publish')
-                    ->where('authorId = ?', $blogId))->num,
+                    ->where('authorId = ?', $this->uid))->num,
                 "waiting" => $this->db->fetchObject($this->db->select(array('COUNT(cid)' => 'num'))
                     ->from('table.contents')
                     ->where('table.contents.type = ? OR table.contents.type = ?', 'post', 'post_draft')
                     ->where('table.contents.status = ?', 'waiting')
-                    ->where('authorId = ?', $blogId))->num,
+                    ->where('authorId = ?', $this->uid))->num,
                 "draft" => $this->db->fetchObject($this->db->select(array('COUNT(cid)' => 'num'))
                     ->from('table.contents')
                     ->where('table.contents.type = ?', 'post_draft')
-                    ->where('authorId = ?', $blogId))->num,
+                    ->where('authorId = ?', $this->uid))->num,
                 "hidden" => $this->db->fetchObject($this->db->select(array('COUNT(cid)' => 'num'))
                     ->from('table.contents')
                     ->where('table.contents.type = ?', 'post')
                     ->where('table.contents.status = ?', 'hidden')
-                    ->where('authorId = ?', $blogId))->num,
+                    ->where('authorId = ?', $this->uid))->num,
                 "private" => $this->db->fetchObject($this->db->select(array('COUNT(cid)' => 'num'))
                     ->from('table.contents')
                     ->where('table.contents.type = ?', 'post')
                     ->where('table.contents.status = ?', 'private')
-                    ->where('authorId = ?', $blogId))->num,
+                    ->where('authorId = ?', $this->uid))->num,
                 "textSize" => $this->getCharacters("table.contents", "post")
             ),
             "page" => array(
                 "all" => $this->db->fetchObject($this->db->select(array('COUNT(cid)' => 'num'))
                     ->from('table.contents')
                     ->where('table.contents.type = ?', 'page')
-                    ->where('authorId = ?', $blogId))->num,
+                    ->where('authorId = ?', $this->uid))->num,
                 "publish" => $this->db->fetchObject($this->db->select(array('COUNT(cid)' => 'num'))
                     ->from('table.contents')
                     ->where('table.contents.type = ?', 'page')
                     ->where('table.contents.status = ?', 'publish')
-                    ->where('authorId = ?', $blogId))->num,
+                    ->where('authorId = ?', $this->uid))->num,
                 "hidden" => $this->db->fetchObject($this->db->select(array('COUNT(cid)' => 'num'))
                     ->from('table.contents')
                     ->where('table.contents.type = ?', 'page')
                     ->where('table.contents.status = ?', 'hidden')
-                    ->where('authorId = ?', $blogId))->num,
+                    ->where('authorId = ?', $this->uid))->num,
                 "draft" => $this->db->fetchObject($this->db->select(array('COUNT(cid)' => 'num'))
                     ->from('table.contents')
                     ->where('table.contents.type = ?', 'page_draft')
-                    ->where('authorId = ?', $blogId))->num,
+                    ->where('authorId = ?', $this->uid))->num,
                 "textSize" => $this->getCharacters("table.contents", "page")
             ),
             "comment" => array(
@@ -429,7 +399,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
                     ->from('table.comments'))->num,
                 "me" => $this->db->fetchObject($this->db->select(array('COUNT(coid)' => 'num'))
                     ->from('table.comments')
-                    ->where('table.comments.authorId = ?', $blogId))->num,
+                    ->where('table.comments.authorId = ?', $this->uid))->num,
                 "publish" => $this->db->fetchObject($this->db->select(array('COUNT(coid)' => 'num'))
                     ->from('table.comments')
                     ->where('table.comments.status = ?', 'approved'))->num,
@@ -476,7 +446,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
     /**
      * 获取指定id的post
      *
-     * @param $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param int $postId
@@ -486,14 +456,14 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Widget_Exception
      * @access public
      */
-    public function NbGetPost($blogId, $userName, $password, $postId, $struct)
+    public function NbGetPost($union, $userName, $password, $postId, $struct)
     {
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
         $select = $this->db->select()->from('table.contents');
-        $select->where('table.contents.authorId = ?', $blogId);
+        $select->where('table.contents.authorId = ?', $this->uid);
         $select->where('table.contents.cid = ?', $postId);
 
         $fetchAll = $this->db->fetchAll($select);
@@ -508,7 +478,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
     /**
      * 获取指定id的page
      *
-     * @param $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param int $postId
@@ -518,18 +488,18 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Widget_Exception
      * @access public
      */
-    public function NbGetPage($blogId, $userName, $password, $postId, $struct)
+    public function NbGetPage($union, $userName, $password, $postId, $struct)
     {
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
-        return $this->NbGetPost($blogId, $userName, $password, $postId, $struct);
+        return $this->NbGetPost($union, $userName, $password, $postId, $struct);
     }
 
     /**
      * 获取文章
      *
-     * @param int $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $struct
@@ -538,9 +508,9 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Widget_Exception
      * @access public
      */
-    public function NbGetPosts($blogId, $userName, $password, $struct)
+    public function NbGetPosts($union, $userName, $password, $struct)
     {
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -548,7 +518,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
         $type = isset($struct['type']) && 'page' == $struct['type'] ? 'page' : 'post';
 
         $select = $this->db->select()->from('table.contents');
-        $select->where('table.contents.authorId = ?', $blogId);
+        $select->where('table.contents.authorId = ?', $this->uid);
 
         switch ($status) {
             case "draft":
@@ -563,7 +533,8 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
         }
 
         if (!empty($struct['keywords'])) {
-            $select->where('table.contents.title LIKE ?', '%' . $struct['keywords'] . '%');
+            $searchQuery = '%' . str_replace(' ', '%', $struct['keywords']) . '%';
+            $select->where('table.contents.title LIKE ? OR table.contents.text LIKE ?', $searchQuery, $searchQuery);
         }
 
         $pageSize = empty($struct['number']) ? 10 : abs(intval($struct['number']));
@@ -590,7 +561,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
     /**
      * 获取独立页面
      *
-     * @param int $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $struct
@@ -599,19 +570,19 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Widget_Exception
      * @access public
      */
-    public function NbGetPages($blogId, $userName, $password, $struct)
+    public function NbGetPages($union, $userName, $password, $struct)
     {
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
         $struct['type'] = "page";
-        return $this->NbGetPosts($blogId, $userName, $password, $struct);
+        return $this->NbGetPosts($union, $userName, $password, $struct);
     }
 
     /**
      * 撰写文章
      *
-     * @param int $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $content
@@ -622,9 +593,9 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @noinspection PhpUndefinedMethodInspection
      * @noinspection DuplicatedCode
      */
-    public function NbNewPost($blogId, $userName, $password, $content)
+    public function NbNewPost($union, $userName, $password, $content)
     {
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -667,7 +638,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
             foreach ($content['categories'] as $category) {
                 if (!$this->db->fetchRow($this->db->select('mid')
                     ->from('table.metas')->where('type = ? AND name = ?', 'category', $category))) {
-                    $this->NewCategory($blogId, $userName, $password, array('name' => $category));
+                    $this->NewCategory($union, $userName, $password, array('name' => $category));
                 }
 
                 $input['category'][] = $this->db->fetchObject($this->db->select('mid')
@@ -725,7 +696,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
     /**
      * 编辑文章
      *
-     * @param int $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param array $content
@@ -734,25 +705,25 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Widget_Exception
      * @access public
      */
-    public function NbEditPost($blogId, $userName, $password, $content)
+    public function NbEditPost($union, $userName, $password, $content)
     {
-        return $this->NbNewPost($blogId, $userName, $password, $content);
+        return $this->NbNewPost($union, $userName, $password, $content);
     }
 
     /**
      * 删除文章
-     * @param mixed $blogId
-     * @param mixed $userName
-     * @param mixed $password
+     * @param string $union
+     * @param string $userName
+     * @param string $password
      * @param $postId
      * @return array|IXR_Error
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      * @access public
      */
-    public function NbDeletePost($blogId, $userName, $password, $postId)
+    public function NbDeletePost($union, $userName, $password, $postId)
     {
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -768,18 +739,17 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 获取评论
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param array $struct
      * @return array|IXR_Error
-     * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbGetComments($blogId, $userName, $password, $struct)
+    public function NbGetComments($union, $userName, $password, $struct)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -799,7 +769,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
             'table.comments.parent',
             'table.contents.title'
         )->from('table.comments')->join('table.contents', 'table.comments.cid = table.contents.cid', Typecho_Db::LEFT_JOIN);
-        $select->where('table.comments.ownerId = ?', $blogId);
+        $select->where('table.comments.ownerId = ?', $this->uid);
 
         if (!empty($struct['cid'])) {
             $select->where('table.comments.cid = ?', $struct['cid']);
@@ -836,7 +806,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
     /**
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param array $struct
@@ -844,56 +814,20 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbGetAlarmComments($blogId, $userName, $password, $struct)
+    public function NbGetAlarmComments($union, $userName, $password, $struct)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
         if (empty($struct['lastTime'])) {
             return new IXR_Error(403, _t('缺少参数'));
         }
         if (empty($struct['number'])) {
-            $query = $this->db->select()->from('table.comments')->where('table.comments.authorId != ?', $blogId)->where('created >= ?', intval($struct['lastTime']));
+            $query = $this->db->select()->from('table.comments')->where('table.comments.authorId != ?', $this->uid)->where('created >= ?', intval($struct['lastTime']));
             $result = $this->db->fetchAll($query);
         } else {
-            $query = $this->db->select(array('COUNT(coid)' => 'num'))->from('table.comments')->where('table.comments.authorId != ?', $blogId)->where('created >= ?', intval($struct['lastTime']));
-            $result = $this->db->fetchObject($query)->num;
-        }
-        return array(true, $result);
-    }
-
-    /**
-     *
-     * @access public
-     * @param integer $blogId
-     * @param string $userName
-     * @param string $password
-     * @param array $struct
-     * @return array|IXR_Error
-     * @throws Typecho_Exception
-     * @throws Typecho_Widget_Exception
-     */
-    public function NbGetAlarmMessages($blogId, $userName, $password, $struct)
-    {
-        /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
-            return $this->error;
-        }
-        if (empty($struct['lastTime'])) {
-            return new IXR_Error(403, _t('缺少参数'));
-        }
-
-        /** @noinspection PhpUndefinedFieldInspection */
-        if (!isset($this->options->plugins['activated']['Messages'])) {
-            return new IXR_Error(403, "没有启用 messages 插件");
-        }
-
-        if (empty($struct['number'])) {
-            $query = $this->db->select()->from('table.messages')->where('table.messages.authorId = ?', $blogId)->where('created >= ?', intval($struct['lastTime']));
-            $result = $this->db->fetchAll($query);
-        } else {
-            $query = $this->db->select(array('COUNT(mid)' => 'num'))->from('table.messages')->where('table.messages.authorId = ?', $blogId)->where('created >= ?', intval($struct['lastTime']));
+            $query = $this->db->select(array('COUNT(coid)' => 'num'))->from('table.comments')->where('table.comments.authorId != ?', $this->uid)->where('created >= ?', intval($struct['lastTime']));
             $result = $this->db->fetchObject($query)->num;
         }
         return array(true, $result);
@@ -903,7 +837,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 删除评论
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param integer $commentId
@@ -911,10 +845,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbDeleteComment($blogId, $userName, $password, $commentId)
+    public function NbDeleteComment($union, $userName, $password, $commentId)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -933,7 +867,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 创建评论
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param mixed $path
@@ -943,10 +877,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Widget_Exception
      * @noinspection PhpUnhandledExceptionInspection
      */
-    public function NbNewComment($blogId, $userName, $password, $path, $struct)
+    public function NbNewComment($union, $userName, $password, $path, $struct)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -1003,7 +937,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 获取评论
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param integer $commentId
@@ -1011,10 +945,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbGetComment($blogId, $userName, $password, $commentId)
+    public function NbGetComment($union, $userName, $password, $commentId)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -1037,7 +971,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 编辑评论
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param integer $commentId
@@ -1046,10 +980,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbEditComment($blogId, $userName, $password, $commentId, $struct)
+    public function NbEditComment($union, $userName, $password, $commentId, $struct)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -1103,7 +1037,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
     /**
      * NewMedia
      *
-     * @param int $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param mixed $data
@@ -1113,9 +1047,9 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @access public
      * @noinspection PhpUndefinedMethodInspection
      */
-    public function NbNewMedia($blogId, $userName, $password, $data)
+    public function NbNewMedia($union, $userName, $password, $data)
     {
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -1175,7 +1109,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
     /**
      * 获取所有的分类
      *
-     * @param int $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @return array|IXR_Error
@@ -1183,9 +1117,9 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Widget_Exception
      * @access public
      */
-    public function NbGetCategories($blogId, $userName, $password)
+    public function NbGetCategories($union, $userName, $password)
     {
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -1203,7 +1137,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
     /**
      * 添加一个新的分类
      *
-     * @param int $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $category
@@ -1212,9 +1146,9 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Widget_Exception
      * @access public
      */
-    public function NbNewCategory($blogId, $userName, $password, $category)
+    public function NbNewCategory($union, $userName, $password, $category)
     {
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -1240,7 +1174,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
     /**
      * 编辑分类
      *
-     * @param int $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $category
@@ -1249,9 +1183,9 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Widget_Exception
      * @access public
      */
-    public function NbEditCategory($blogId, $userName, $password, $category)
+    public function NbEditCategory($union, $userName, $password, $category)
     {
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -1287,7 +1221,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 删除分类
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param integer $categoryId
@@ -1295,10 +1229,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbDeleteCategory($blogId, $userName, $password, $categoryId)
+    public function NbDeleteCategory($union, $userName, $password, $categoryId)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, 'administrator')) {
+        if (!$this->checkAccess($userName, $password, 'administrator', $union)) {
             return $this->error;
         }
 
@@ -1313,7 +1247,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
     /**
      * 获取所有的标签
      *
-     * @param int $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @return array|IXR_Error
@@ -1321,9 +1255,9 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Widget_Exception
      * @access public
      */
-    public function NbGetTags($blogId, $userName, $password)
+    public function NbGetTags($union, $userName, $password)
     {
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return ($this->error);
         }
 
@@ -1346,7 +1280,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
     /**
      * new 独立页面
      *
-     * @param int $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $content
@@ -1355,16 +1289,16 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Widget_Exception
      * @access public
      */
-    public function NbNewPage($blogId, $userName, $password, $content)
+    public function NbNewPage($union, $userName, $password, $content)
     {
         $content['type'] = 'page';
-        return $this->NbNewPost($blogId, $userName, $password, $content);
+        return $this->NbNewPost($union, $userName, $password, $content);
     }
 
     /**
      * 编辑独立页面
      *
-     * @param int $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $content
@@ -1373,10 +1307,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Widget_Exception
      * @access public
      */
-    public function NbEditPage($blogId, $userName, $password, $content)
+    public function NbEditPage($union, $userName, $password, $content, $union)
     {
         $content['type'] = 'page';
-        return $this->NbNewPost($blogId, $userName, $password, $content);
+        return $this->NbNewPost($union, $userName, $password, $content);
     }
 
 
@@ -1384,7 +1318,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 获取系统选项
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param array $options
@@ -1392,10 +1326,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbGetOptions($blogId, $userName, $password, $options = array())
+    public function NbGetOptions($union, $userName, $password, $options = array())
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, 'administrator')) {
+        if (!$this->checkAccess($userName, $password, 'administrator', $union)) {
             return $this->error;
         }
 
@@ -1403,10 +1337,8 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
         foreach ($options as $option) {
             $select = $this->db->select()->from('table.options')
                 ->where('name = ?', $option)
-                ->where('user = ? ', 0);
-            if ($this->uid > 1) {
-                $select->orWhere('user = ?', $this->uid - 1);
-            }
+                ->where('user = ? ', 0)
+                ->orWhere('user = ?', $this->uid);
             $select->order('user', Typecho_Db::SORT_DESC);
             $os = $this->db->fetchAll($select);
             if (!empty($os)) {
@@ -1426,7 +1358,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 设置系统选项
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param array $options
@@ -1434,10 +1366,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbSetOptions($blogId, $userName, $password, $options = array())
+    public function NbSetOptions($union, $userName, $password, $options = array())
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, 'administrator')) {
+        if (!$this->checkAccess($userName, $password, 'administrator', $union)) {
             return $this->error;
         }
 
@@ -1492,7 +1424,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 获取媒体文件
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $struct
@@ -1500,10 +1432,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbGetMedias($blogId, $userName, $password, $struct)
+    public function NbGetMedias($union, $userName, $password, $struct)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, 'administrator')) {
+        if (!$this->checkAccess($userName, $password, 'administrator', $union)) {
             return $this->error;
         }
 
@@ -1545,17 +1477,17 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 清理未归档的附件
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @return array|IXR_Error
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbClearMedias($blogId, $userName, $password)
+    public function NbClearMedias($union, $userName, $password)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, 'administrator')) {
+        if (!$this->checkAccess($userName, $password, 'administrator', $union)) {
             return $this->error;
         }
         $input = array();
@@ -1575,7 +1507,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 删除附件
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $struct
@@ -1583,10 +1515,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbDeleteMedia($blogId, $userName, $password, $struct)
+    public function NbDeleteMedia($union, $userName, $password, $struct)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, 'administrator')) {
+        if (!$this->checkAccess($userName, $password, 'administrator', $union)) {
             return $this->error;
         }
         if (empty($struct["cids"]) || !is_array($struct["cids"])) {
@@ -1611,7 +1543,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 编辑附件
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $struct
@@ -1619,10 +1551,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbEditMedia($blogId, $userName, $password, $struct)
+    public function NbEditMedia($union, $userName, $password, $struct)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, 'administrator')) {
+        if (!$this->checkAccess($userName, $password, 'administrator', $union)) {
             return $this->error;
         }
 
@@ -1655,7 +1587,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 内容替换 - 插件
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $struct
@@ -1666,10 +1598,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @noinspection SqlDialectInspection
      * @noinspection PhpSingleStatementWithBracesInspection
      */
-    public function NbPluginReplace($blogId, $userName, $password, $struct)
+    public function NbPluginReplace($union, $userName, $password, $struct)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
         if (empty($struct['former']) || empty($struct['last']) || empty($struct['object'])) {
@@ -1725,7 +1657,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 友情链接管理 - 插件
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $struct
@@ -1733,10 +1665,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbPluginDynamics($blogId, $userName, $password, $struct)
+    public function NbPluginDynamics($union, $userName, $password, $struct)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -1768,7 +1700,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
                 }
                 $date = (new Typecho_Date($this->options->gmtTime))->time();
                 $dynamic['text'] = $dynamicMap['text'];
-                $dynamic['authorId'] = $blogId;
+                $dynamic['authorId'] = $this->uid;
                 $dynamic['modified'] = $date;
                 if (isset($dynamicMap['did'])) $dynamic['did'] = intval($dynamicMap['did']);
 
@@ -1799,7 +1731,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
         } else {
             try {
                 $select = $this->db->select()->from('table.dynamics')
-                    ->where('table.dynamics.authorId = ?', $blogId);
+                    ->where('table.dynamics.authorId = ?', $this->uid);
 
                 if (!empty($struct['status'])) {
                     if ($struct['status'] != "all") {
@@ -1830,7 +1762,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 友情链接管理 - 插件
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $struct
@@ -1838,78 +1770,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbPluginMessages($blogId, $userName, $password, $struct)
+    public function NbPluginLinks($union, $userName, $password, $struct)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
-            return $this->error;
-        }
-
-        /** @noinspection PhpUndefinedFieldInspection */
-        if (!isset($this->options->plugins['activated']['Messages'])) {
-            return new IXR_Error(403, "没有启用 messages 插件");
-        }
-
-        if (!is_array($struct)) {
-            return new IXR_Error(403, "struct不是一个数组对象");
-        }
-
-        if (!isset($struct['method'])) {
-            return new IXR_Error(403, "没有设定模式");
-        }
-
-        if ($struct['method'] == "delete") {
-            $mids = $struct['mids'];
-            if (!is_array($mids)) {
-                return new IXR_Error(403, "mids 不是一个数组对象");
-            }
-            $deleteCount = 0;
-            foreach ($mids as $mid) {
-                if ($this->db->query($this->db->delete('table.messages')->where('mid = ?', $mid))) {
-                    $deleteCount++;
-                }
-            }
-            return array(true, $deleteCount);
-        } else if ($struct['method'] == "destroy") {
-            $this->db->query($this->db->delete('table.messages')
-                ->where('destroy <?', time())
-                ->where('authorId =? ', $blogId)
-            );
-            return array(true, null);
-        } else {
-            try {
-                $select = $this->db->select()->from('table.messages')
-                    ->where('table.messages.authorId = ?', $blogId);
-
-                $pageSize = empty($struct['number']) ? 10 : abs(intval($struct['number']));
-                $currentPage = empty($struct['offset']) ? 1 : ceil(abs(intval($struct['offset'])) / $pageSize);
-                $select->order('table.messages.created', Typecho_Db::SORT_DESC)
-                    ->page($currentPage, $pageSize);
-
-                $messages = $this->db->fetchAll($select);
-                return array(true, $messages);
-            } catch (Typecho_Widget_Exception $e) {
-                return new IXR_Error($e->getCode(), $e->getMessage());
-            }
-        }
-    }
-
-    /**
-     * 友情链接管理 - 插件
-     *
-     * @access public
-     * @param integer $blogId
-     * @param string $userName
-     * @param string $password
-     * @param $struct
-     * @return array|IXR_Error
-     * @throws Typecho_Exception
-     * @throws Typecho_Widget_Exception
-     */
-    public function NbPluginLinks($blogId, $userName, $password, $struct)
-    {
-        /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -1995,7 +1859,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 插件配置管理
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $struct
@@ -2003,10 +1867,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbConfigPlugins($blogId, $userName, $password, $struct)
+    public function NbConfigPlugins($union, $userName, $password, $struct)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -2059,7 +1923,7 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * 主题配置管理
      *
      * @access public
-     * @param integer $blogId
+     * @param string $union
      * @param string $userName
      * @param string $password
      * @param $struct
@@ -2067,10 +1931,10 @@ class Widget_XmlRpc extends Widget_Abstract_Contents implements Widget_Interface
      * @throws Typecho_Exception
      * @throws Typecho_Widget_Exception
      */
-    public function NbConfigTheme($blogId, $userName, $password, $struct)
+    public function NbConfigTheme($union, $userName, $password, $struct)
     {
         /** 检查权限*/
-        if (!$this->checkAccess($userName, $password, "administrator")) {
+        if (!$this->checkAccess($userName, $password, "administrator", $union)) {
             return $this->error;
         }
 
@@ -2378,11 +2242,9 @@ EOF;
                 'kraitnabo.plugin.replace' => array($this, 'NbPluginReplace'),
                 'kraitnabo.plugin.links' => array($this, 'NbPluginLinks'),
                 'kraitnabo.plugin.dynamics' => array($this, 'NbPluginDynamics'),
-                'kraitnabo.plugin.messages' => array($this, 'NbPluginMessages'),
                 'kraitnabo.config.plugins' => array($this, 'NbConfigPlugins'),
                 'kraitnabo.config.theme' => array($this, 'NbConfigTheme'),
                 'kraitnabo.alarm.comments.get' => array($this, 'NbGetAlarmComments'),
-                'kraitnabo.alarm.messages.get' => array($this, 'NbGetAlarmMessages'),
 
                 /** PingBack */
                 'pingback.ping' => array($this, 'pingbackPing'),
